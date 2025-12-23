@@ -188,7 +188,7 @@ pipeline {
             Common issues:
             - Docker build failures
             - Docker Hub authentication
-            - Git credentials
+            - Git credential
             - Manifest repo access
             """
         }
