@@ -82,10 +82,9 @@ pipeline {
         stage('Update Manifest Repository') {
             steps {
                 script {
-                    echo '📝 Updating Kubernetes manifests...'
+                    echo '📝 Updating Kubernetes manifests with Argo Rollouts...'
                     
-                    // Get manifest repo URL from environment variable
-                    def manifestRepo = env.MANIFEST_REPO_URL //?: 'https://github.com/your-username/argo-bluegreen-manifests.git'
+                    def manifestRepo = env.MANIFEST_REPO_URL
                     
                     withCredentials([usernamePassword(
                         credentialsId: "${GIT_CREDENTIALS_ID}",
@@ -96,21 +95,18 @@ pipeline {
                             # Clone manifest repository
                             rm -rf manifests-temp
                             
-                            # Extract repo path for git clone with credentials
                             REPO_PATH=\$(echo ${manifestRepo} | sed 's|https://||')
                             git clone https://${GIT_USER}:${GIT_TOKEN}@\${REPO_PATH} manifests-temp
                             
                             cd manifests-temp
                             
-                            # Configure git - use Jenkins user or credential username
+                            # Configure git
                             git config user.email "${GIT_USER_EMAIL}"
                             git config user.name "${GIT_USER}"
                             
-                            # Update backend deployment image
-                            sed -i 's|image: .*/bluegreen-backend:.*|image: ${BACKEND_IMAGE}:${BUILD_NUMBER}|g' backend-deployment.yaml
-                            
-                            # Update green frontend deployment image (deploy to inactive)
-                            sed -i 's|image: .*/bluegreen-frontend:.*|image: ${FRONTEND_IMAGE}:${BUILD_NUMBER}|g' frontend-deployment-green.yaml
+                            # Update Rollout resources with new images
+                            sed -i 's|image: .*bluegreen-backend:.*|image: ${BACKEND_IMAGE}:${BUILD_NUMBER}|g' backend-rollout.yaml
+                            sed -i 's|image: .*bluegreen-frontend:.*|image: ${FRONTEND_IMAGE}:${BUILD_NUMBER}|g' frontend-rollout.yaml
                             
                             # Update ConfigMap with build number
                             sed -i 's|BUILD_NUMBER: .*|BUILD_NUMBER: "${BUILD_NUMBER}"|g' configmap.yaml
@@ -119,14 +115,12 @@ pipeline {
                             if git diff --quiet; then
                                 echo "No changes to commit"
                             else
-                                # Commit and push changes
-                                git add backend-deployment.yaml frontend-deployment-green.yaml configmap.yaml
-                                git commit -m "Build ${BUILD_NUMBER}: Update backend and green frontend images"
+                                git add backend-rollout.yaml frontend-rollout.yaml configmap.yaml
+                                git commit -m "Build ${BUILD_NUMBER}: Update images for Argo Rollouts"
                                 git push origin main
-                                echo "✅ Manifests updated and pushed"
+                                echo "✅ Manifests updated - ArgoCD will sync and Argo Rollouts will handle blue-green deployment"
                             fi
                             
-                            # Cleanup
                             cd ..
                             rm -rf manifests-temp
                         """
