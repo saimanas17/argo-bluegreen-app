@@ -157,7 +157,7 @@ pipeline {
                - frontend-deployment-green.yaml
                - configmap.yaml
             
-            🔄 ArgoCD will sync within 3 minutes
+            🔄 ArgoCD will sync from a webhook configuration
             
             📊 Dashboard: http://<node-ip>:30080
             
