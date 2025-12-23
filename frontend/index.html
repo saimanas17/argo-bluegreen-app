@@ -11,11 +11,47 @@
             box-sizing: border-box;
         }
 
+        /* Version Banner at the top */
+        .version-banner {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 15px;
+            text-align: center;
+            font-weight: bold;
+            font-size: 20px;
+            z-index: 9999;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            animation: slideDown 0.5s ease;
+            letter-spacing: 1px;
+        }
+        
+        .version-active {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+        }
+        
+        .version-preview {
+            background: linear-gradient(135deg, #2ecc71, #27ae60);
+            color: white;
+        }
+
+        @keyframes slideDown {
+            from { transform: translateY(-100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
-            padding: 20px;
+            padding: 70px 20px 20px 20px;  /* Extra padding for banner */
+            transition: background 0.5s ease;
+        }
+
+        body.preview-theme {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
         }
 
         .container {
@@ -47,8 +83,8 @@
             margin: 10px 0;
         }
 
-        .blue { background: #3498db; }
-        .green { background: #2ecc71; }
+        .badge-active { background: #3498db; }
+        .badge-preview { background: #2ecc71; }
 
         .info-grid {
             display: grid;
@@ -106,7 +142,7 @@
             margin-bottom: 15px;
         }
 
-        .service-info .active-version {
+        .service-info .version-indicator {
             font-size: 18px;
             font-weight: bold;
             padding: 10px;
@@ -129,8 +165,8 @@
             border-left: 4px solid #ddd;
         }
 
-        .pod-item.blue-pod { border-left-color: #3498db; }
-        .pod-item.green-pod { border-left-color: #2ecc71; }
+        .pod-item.active-pod { border-left-color: #3498db; }
+        .pod-item.preview-pod { border-left-color: #2ecc71; }
 
         .pod-header {
             display: flex;
@@ -232,10 +268,15 @@
     </style>
 </head>
 <body>
+    <!-- Version Banner - Will show ACTIVE or PREVIEW -->
+    <div id="versionBanner" class="version-banner version-active">
+        🔵 ACTIVE VERSION - Build: Loading...
+    </div>
+
     <div class="container">
         <div class="header">
             <h1>🚀 Blue-Green Deployment Dashboard</h1>
-            <div class="deployment-badge" id="deploymentBadge">
+            <div class="deployment-badge badge-active" id="deploymentBadge">
                 Loading...
             </div>
             
@@ -268,18 +309,18 @@
                         <div class="label">Total Pods</div>
                     </div>
                     <div class="summary-item">
-                        <div class="number" id="bluePods">-</div>
-                        <div class="label">Blue Pods</div>
+                        <div class="number" id="activePods">-</div>
+                        <div class="label">Active Pods</div>
                     </div>
                     <div class="summary-item">
-                        <div class="number" id="greenPods">-</div>
-                        <div class="label">Green Pods</div>
+                        <div class="number" id="previewPods">-</div>
+                        <div class="label">Preview Pods</div>
                     </div>
                 </div>
                 
                 <div class="service-info">
-                    <strong>Active Service Route:</strong>
-                    <div class="active-version" id="activeVersion">
+                    <strong>Current Version:</strong>
+                    <div class="version-indicator badge-active" id="currentVersion">
                         Loading...
                     </div>
                 </div>
@@ -299,6 +340,9 @@
     <script>
         const API_URL = '';  // Empty string - nginx proxies /api/ to backend
 
+        // Global state
+        let isPreview = false;
+
         async function fetchData(endpoint) {
             try {
                 const response = await fetch(`${API_URL}${endpoint}`);
@@ -307,6 +351,52 @@
             } catch (error) {
                 console.error(`Error fetching ${endpoint}:`, error);
                 throw error;
+            }
+        }
+
+        async function detectVersion() {
+            try {
+                // Detect version based on URL port
+                const port = window.location.port || '80';
+                const banner = document.getElementById('versionBanner');
+                const badge = document.getElementById('deploymentBadge');
+                const currentVersion = document.getElementById('currentVersion');
+                
+                // Get build number from API
+                const versionData = await fetchData('/api/version');
+                const buildNumber = versionData.buildNumber;
+                
+                if (port === '30081') {
+                    // Preview version (green)
+                    isPreview = true;
+                    banner.className = 'version-banner version-preview';
+                    banner.innerHTML = `🟢 PREVIEW VERSION - Build: ${buildNumber}`;
+                    
+                    badge.className = 'deployment-badge badge-preview';
+                    badge.textContent = `PREVIEW (Build ${buildNumber})`;
+                    
+                    currentVersion.className = 'version-indicator badge-preview';
+                    currentVersion.textContent = 'PREVIEW VERSION';
+                    
+                    // Change body theme to green
+                    document.body.classList.add('preview-theme');
+                } else {
+                    // Active version (blue)
+                    isPreview = false;
+                    banner.className = 'version-banner version-active';
+                    banner.innerHTML = `🔵 ACTIVE VERSION - Build: ${buildNumber}`;
+                    
+                    badge.className = 'deployment-badge badge-active';
+                    badge.textContent = `ACTIVE (Build ${buildNumber})`;
+                    
+                    currentVersion.className = 'version-indicator badge-active';
+                    currentVersion.textContent = 'ACTIVE VERSION';
+                    
+                    // Ensure body has blue theme
+                    document.body.classList.remove('preview-theme');
+                }
+            } catch (error) {
+                console.error('Error detecting version:', error);
             }
         }
 
@@ -346,8 +436,8 @@
                 
                 // Update summary
                 document.getElementById('totalPods').textContent = data.summary.total;
-                document.getElementById('bluePods').textContent = data.summary.blue;
-                document.getElementById('greenPods').textContent = data.summary.green;
+                document.getElementById('activePods').textContent = data.summary.active;
+                document.getElementById('previewPods').textContent = data.summary.preview;
                 
                 // Update pod list
                 const podList = document.getElementById('podList');
@@ -365,7 +455,7 @@
                             </span>
                         </div>
                         <div class="pod-details">
-                            <div><strong>Version:</strong> ${pod.version}</div>
+                            <div><strong>Version:</strong> ${pod.version.toUpperCase()}</div>
                             <div><strong>IP:</strong> ${pod.ip || 'N/A'}</div>
                             <div><strong>Node:</strong> ${pod.node || 'N/A'}</div>
                             <div><strong>Restarts:</strong> ${pod.restarts}</div>
@@ -386,18 +476,8 @@
         async function loadServiceInfo() {
             try {
                 const data = await fetchData('/api/service');
-                
-                // Update the main badge with active version
-                const badge = document.getElementById('deploymentBadge');
-                const activeVersion = data.activeVersion.toUpperCase();
-                badge.textContent = `${activeVersion} Version (Active)`;
-                badge.className = `deployment-badge ${data.activeVersion}`;
-                
-                // Update active version in summary card
-                const activeVersionDiv = document.getElementById('activeVersion');
-                activeVersionDiv.textContent = `${activeVersion} Version`;
-                activeVersionDiv.className = `active-version ${data.activeVersion}`;
-                
+                // Service info is now shown in version detection
+                console.log('Service info:', data);
             } catch (error) {
                 console.error('Error loading service info:', error);
             }
@@ -405,6 +485,7 @@
 
         async function refreshData() {
             await Promise.all([
+                detectVersion(),
                 loadDeploymentInfo(),
                 loadPods(),
                 loadServiceInfo(),
