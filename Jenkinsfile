@@ -126,7 +126,7 @@ pipeline {
                             sleep 15
                             
                             # Check if rollout exists
-                            if ! kubectl get rollout ${ROLLOUT_NAME} -n ${NAMESPACE} &>/dev/null; then
+                            if ! kubectl argo rollouts get rollout ${ROLLOUT_NAME} -n ${NAMESPACE} &>/dev/null; then
                                 echo "❌ Rollout ${ROLLOUT_NAME} not found!"
                                 exit 1
                             fi
