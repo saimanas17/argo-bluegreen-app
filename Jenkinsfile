@@ -16,6 +16,7 @@ pipeline {
         // Kubernetes configuration
         ROLLOUT_NAME = 'bluegreen-frontend'
         NAMESPACE = 'bluegreen-demo'
+        PUBLIC_IP = "${env.EXT_IP}"
     }
     
     stages {
@@ -156,24 +157,21 @@ pipeline {
                         echo "Service Information:"
                         echo "==================================="
                         
-                        # Get node IP
-                        NODE_IP=\$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
-                        echo "Node IP: \$NODE_IP"
-                        
+                                       
                         # Get active service port
                         ACTIVE_PORT=\$(kubectl get service bluegreen-frontend-active -n ${NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "30080")
                         echo ""
-                        echo "🟢 Active (Production): http://\$NODE_IP:\$ACTIVE_PORT"
+                        echo "🟢 Active (Production): http://${PUBLIC_IP}:\$ACTIVE_PORT"
                         
                         # Get preview service port
                         PREVIEW_PORT=\$(kubectl get service bluegreen-frontend-preview -n ${NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "30081")
-                        echo "🔵 Preview (Build ${BUILD_NUMBER}): http://\$NODE_IP:\$PREVIEW_PORT"
+                        echo "🔵 Preview (Build ${BUILD_NUMBER}): http://${PUBLIC_IP}:\$PREVIEW_PORT"
                         echo ""
                         echo "==================================="
                         
                         # Save for later stages
-                        echo "ACTIVE_URL=http://\$NODE_IP:\$ACTIVE_PORT" > urls.txt
-                        echo "PREVIEW_URL=http://\$NODE_IP:\$PREVIEW_PORT" >> urls.txt
+                        echo "ACTIVE_URL=http://${PUBLIC_IP}:\$ACTIVE_PORT" > urls.txt
+                        echo "PREVIEW_URL=http://${PUBLIC_IP}:\$PREVIEW_PORT" >> urls.txt
                     """
                     
                     // Read URLs
@@ -201,7 +199,7 @@ pipeline {
                     🐳 Image: ${FRONTEND_IMAGE}:${BUILD_NUMBER}
                     
                     🌐 URLs:
-                    ├─ 🟢 Production (Active):  ${activeUrl}
+                    ├─ 🟢 Current (Active):  ${activeUrl}
                     └─ 🔵 Preview (New):        ${previewUrl}
                     
                     ✅ Test Checklist:
@@ -214,22 +212,21 @@ pipeline {
                     ⚠️  IMPORTANT: Test the PREVIEW URL before promoting!
                     
                     ═══════════════════════════════════════════════════════
-                    Click 'Proceed' to PROMOTE to Production
+                    Click 'Proceed' to Switch Traffic
                     Click 'Abort' to CANCEL deployment
                     ═══════════════════════════════════════════════════════
                     """
                     
                     // Manual approval with 30-minute timeout
                     timeout(time: 30, unit: 'MINUTES') {
-                        input message: "🚀 Promote Build ${BUILD_NUMBER} to Production?", 
-                              ok: 'Yes, Promote Now!',
-                              submitter: 'admin,devops'  // Optional: restrict to specific users
+                        input message: "🚀 Promote Build ${BUILD_NUMBER} to switch traffic?", 
+                              ok: 'Yes, Switch Traffic!'  
                     }
                 }
             }
         }
         
-        stage('Promote to Production') {
+        stage('Switch Traffic') {
             steps {
                 script {
                     echo '🚀 Promoting new version to production...'
@@ -281,7 +278,6 @@ pipeline {
             sh """
                 docker rmi ${FRONTEND_IMAGE}:${BUILD_NUMBER} || true
                 docker rmi ${FRONTEND_IMAGE}:latest || true
-                rm -f urls.txt
             """
             cleanWs()
         }
