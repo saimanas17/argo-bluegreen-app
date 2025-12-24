@@ -121,18 +121,15 @@ pipeline {
                     echo '⏳ Waiting for ArgoCD to sync and deploy preview...'
                     
                     timeout(time: 5, unit: 'MINUTES') {
-                        sh '''
+                        sh """
                             echo "Waiting for rollout to update..."
                             sleep 15
                             
-                            # Check if rollout exists
-                            if ! kubectl argo rollouts get rollout ''' + ROLLOUT_NAME + ''' -n ''' + NAMESPACE + ''' &>/dev/null; then
-                                echo "❌ Rollout ''' + ROLLOUT_NAME + ''' not found!"
-                                exit 1
-                            fi
+                            echo "Checking if rollout exists..."
+                            kubectl argo rollouts get rollout ${ROLLOUT_NAME} -n ${NAMESPACE}
                             
-                            echo "✅ Rollout found, checking status..."
-                        '''
+                            echo "✅ Rollout found!"
+                        """
                     }
                 }
             }
