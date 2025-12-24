@@ -15,7 +15,7 @@ pipeline {
         
         // Kubernetes configuration
         ROLLOUT_NAME = 'bluegreen-frontend'
-        NAMESPACE = 'default'
+        NAMESPACE = 'bluegreen-demo'
     }
     
     stages {
