@@ -12,6 +12,10 @@ pipeline {
         // Git configuration
         GIT_CREDENTIALS_ID = 'github-credentials'
         GIT_USER_EMAIL = 'gourabathini.s@northeastern.edu'
+        
+        // Kubernetes configuration
+        ROLLOUT_NAME = 'bluegreen-frontend'
+        NAMESPACE = 'default'
     }
     
     stages {
@@ -110,6 +114,203 @@ pipeline {
                 }
             }
         }
+        
+        stage('Wait for ArgoCD Sync') {
+            steps {
+                script {
+                    echo '⏳ Waiting for ArgoCD to sync and deploy preview...'
+                    
+                    timeout(time: 5, unit: 'MINUTES') {
+                        sh """
+                            echo "Waiting for rollout to update..."
+                            sleep 15
+                            
+                            # Check if rollout exists
+                            if ! kubectl get rollout ${ROLLOUT_NAME} -n ${NAMESPACE} &>/dev/null; then
+                                echo "❌ Rollout ${ROLLOUT_NAME} not found!"
+                                exit 1
+                            fi
+                            
+                            echo "✅ Rollout found, checking status..."
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Wait for Preview Deployment') {
+            steps {
+                script {
+                    echo '⏳ Waiting for preview pods to be ready...'
+                    
+                    timeout(time: 10, unit: 'MINUTES') {
+                        sh """
+                            # Wait for rollout to progress
+                            MAX_ATTEMPTS=60
+                            ATTEMPT=0
+                            
+                            while [ \$ATTEMPT -lt \$MAX_ATTEMPTS ]; do
+                                echo "Checking rollout status (attempt \$((ATTEMPT+1))/\$MAX_ATTEMPTS)..."
+                                
+                                # Get rollout status
+                                STATUS=\$(kubectl argo rollouts status ${ROLLOUT_NAME} -n ${NAMESPACE} 2>&1 || echo "error")
+                                
+                                # Check if healthy or paused (waiting for promotion)
+                                if echo "\$STATUS" | grep -qE "Healthy|Paused"; then
+                                    echo "✅ Preview deployment is ready!"
+                                    kubectl argo rollouts get rollout ${ROLLOUT_NAME} -n ${NAMESPACE}
+                                    break
+                                fi
+                                
+                                # Check if degraded
+                                if echo "\$STATUS" | grep -q "Degraded"; then
+                                    echo "❌ Rollout is degraded!"
+                                    kubectl argo rollouts get rollout ${ROLLOUT_NAME} -n ${NAMESPACE}
+                                    exit 1
+                                fi
+                                
+                                echo "⏳ Status: \$STATUS"
+                                sleep 10
+                                ATTEMPT=\$((ATTEMPT+1))
+                            done
+                            
+                            if [ \$ATTEMPT -ge \$MAX_ATTEMPTS ]; then
+                                echo "❌ Timeout waiting for preview deployment"
+                                exit 1
+                            fi
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Get Preview URLs') {
+            steps {
+                script {
+                    echo '📊 Getting service endpoints...'
+                    
+                    sh """
+                        echo "==================================="
+                        echo "Service Information:"
+                        echo "==================================="
+                        
+                        # Get node IP
+                        NODE_IP=\$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+                        echo "Node IP: \$NODE_IP"
+                        
+                        # Get active service port
+                        ACTIVE_PORT=\$(kubectl get service bluegreen-frontend-active -n ${NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "30080")
+                        echo ""
+                        echo "🟢 Active (Production): http://\$NODE_IP:\$ACTIVE_PORT"
+                        
+                        # Get preview service port
+                        PREVIEW_PORT=\$(kubectl get service bluegreen-frontend-preview -n ${NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "30081")
+                        echo "🔵 Preview (Build ${BUILD_NUMBER}): http://\$NODE_IP:\$PREVIEW_PORT"
+                        echo ""
+                        echo "==================================="
+                        
+                        # Save for later stages
+                        echo "ACTIVE_URL=http://\$NODE_IP:\$ACTIVE_PORT" > urls.txt
+                        echo "PREVIEW_URL=http://\$NODE_IP:\$PREVIEW_PORT" >> urls.txt
+                    """
+                    
+                    // Read URLs
+                    def urls = readFile('urls.txt').trim()
+                    echo urls
+                }
+            }
+        }
+        
+        stage('Manual Approval - Test Preview') {
+            steps {
+                script {
+                    // Read URLs
+                    def urlsContent = readFile('urls.txt').trim()
+                    def lines = urlsContent.split('\n')
+                    def activeUrl = lines[0].split('=')[1]
+                    def previewUrl = lines[1].split('=')[1]
+                    
+                    echo """
+                    ╔════════════════════════════════════════════════════════╗
+                    ║          🎯 PREVIEW READY FOR TESTING                  ║
+                    ╚════════════════════════════════════════════════════════╝
+                    
+                    📦 Build Number: ${BUILD_NUMBER}
+                    🐳 Image: ${FRONTEND_IMAGE}:${BUILD_NUMBER}
+                    
+                    🌐 URLs:
+                    ├─ 🟢 Production (Active):  ${activeUrl}
+                    └─ 🔵 Preview (New):        ${previewUrl}
+                    
+                    ✅ Test Checklist:
+                    ├─ [ ] Application loads correctly
+                    ├─ [ ] All features work as expected
+                    ├─ [ ] UI/UX changes look good
+                    ├─ [ ] No console errors
+                    └─ [ ] Performance is acceptable
+                    
+                    ⚠️  IMPORTANT: Test the PREVIEW URL before promoting!
+                    
+                    ═══════════════════════════════════════════════════════
+                    Click 'Proceed' to PROMOTE to Production
+                    Click 'Abort' to CANCEL deployment
+                    ═══════════════════════════════════════════════════════
+                    """
+                    
+                    // Manual approval with 30-minute timeout
+                    timeout(time: 30, unit: 'MINUTES') {
+                        input message: "🚀 Promote Build ${BUILD_NUMBER} to Production?", 
+                              ok: 'Yes, Promote Now!',
+                              submitter: 'admin,devops'  // Optional: restrict to specific users
+                    }
+                }
+            }
+        }
+        
+        stage('Promote to Production') {
+            steps {
+                script {
+                    echo '🚀 Promoting new version to production...'
+                    
+                    sh """
+                        echo "Executing promotion..."
+                        
+                        # Promote the rollout
+                        kubectl argo rollouts promote ${ROLLOUT_NAME} -n ${NAMESPACE}
+                        
+                        echo "✅ Promotion command executed successfully"
+                        echo ""
+                        echo "Waiting for promotion to complete..."
+                        sleep 5
+                        
+                        # Show rollout status
+                        kubectl argo rollouts get rollout ${ROLLOUT_NAME} -n ${NAMESPACE}
+                    """
+                }
+            }
+        }
+        
+        stage('Verify Production Deployment') {
+            steps {
+                script {
+                    echo '✅ Verifying production deployment...'
+                    
+                    timeout(time: 5, unit: 'MINUTES') {
+                        sh """
+                            # Wait for rollout to be fully healthy
+                            kubectl argo rollouts status ${ROLLOUT_NAME} -n ${NAMESPACE}
+                            
+                            echo ""
+                            echo "Final rollout status:"
+                            kubectl argo rollouts get rollout ${ROLLOUT_NAME} -n ${NAMESPACE}
+                            
+                            echo ""
+                            echo "✅ Production deployment verified!"
+                        """
+                    }
+                }
+            }
+        }
     }
     
     post {
@@ -118,50 +319,112 @@ pipeline {
             sh """
                 docker rmi ${FRONTEND_IMAGE}:${BUILD_NUMBER} || true
                 docker rmi ${FRONTEND_IMAGE}:latest || true
+                rm -f urls.txt
             """
             cleanWs()
         }
         success {
+            script {
+                def urlsContent = readFile('urls.txt').trim()
+                def lines = urlsContent.split('\n')
+                def activeUrl = lines[0].split('=')[1]
+                
+                echo """
+                ╔════════════════════════════════════════════════════════╗
+                ║       ✅ DEPLOYMENT COMPLETED SUCCESSFULLY! ✅          ║
+                ╚════════════════════════════════════════════════════════╝
+                
+                📦 Build: ${BUILD_NUMBER}
+                🐳 Image: ${FRONTEND_IMAGE}:${BUILD_NUMBER}
+                
+                🌐 Production URL: ${activeUrl}
+                
+                ═══════════════════════════════════════════════════════
+                
+                💡 Useful Commands:
+                
+                📊 Check rollout status:
+                   kubectl argo rollouts get rollout ${ROLLOUT_NAME} -n ${NAMESPACE}
+                
+                📊 Watch rollout live:
+                   kubectl argo rollouts get rollout ${ROLLOUT_NAME} -n ${NAMESPACE} --watch
+                
+                ↩️  Rollback if needed:
+                   kubectl argo rollouts undo ${ROLLOUT_NAME} -n ${NAMESPACE}
+                
+                📜 View rollout history:
+                   kubectl argo rollouts history ${ROLLOUT_NAME} -n ${NAMESPACE}
+                
+                ═══════════════════════════════════════════════════════
+                """
+            }
+        }
+        aborted {
             echo """
-            ✅ ========================================
-            ✅ Pipeline completed successfully!
-            ✅ ========================================
+            ╔════════════════════════════════════════════════════════╗
+            ║            ⏸️  DEPLOYMENT ABORTED ⏸️                    ║
+            ╚════════════════════════════════════════════════════════╝
             
-            📦 Built Image:
-               ${FRONTEND_IMAGE}:${BUILD_NUMBER}
+            The promotion was cancelled by user.
             
-            📝 Updated Manifest:
-               rollout.yaml
+            📊 Current State:
+            ├─ Preview pods are still running
+            ├─ Production traffic on OLD version
+            └─ Preview available for testing
             
-            🔄 Next Steps:
-               1. ArgoCD will detect the manifest change
-               2. Argo Rollouts will create preview pods with new image
-               3. Test preview at: http://<node-ip>:30081
-               4. Promote when ready using kubectl or Argo Rollouts Dashboard
+            ═══════════════════════════════════════════════════════
             
-            📊 Active (Current): http://<node-ip>:30080
-            📊 Preview (Build ${BUILD_NUMBER}): http://<node-ip>:30081
+            💡 Next Actions:
             
-            💡 To promote:
-               kubectl argo rollouts promote bluegreen-frontend
+            ✅ To promote manually:
+               kubectl argo rollouts promote ${ROLLOUT_NAME} -n ${NAMESPACE}
             
-            💡 To check status:
-               kubectl argo rollouts status bluegreen-frontend
-               kubectl argo rollouts get rollout bluegreen-frontend --watch
+            ❌ To abort the rollout:
+               kubectl argo rollouts abort ${ROLLOUT_NAME} -n ${NAMESPACE}
+            
+            📊 Check current status:
+               kubectl argo rollouts get rollout ${ROLLOUT_NAME} -n ${NAMESPACE}
+            
+            ═══════════════════════════════════════════════════════
             """
         }
         failure {
             echo """
-            ❌ ========================================
-            ❌ Pipeline failed!
-            ❌ ========================================
+            ╔════════════════════════════════════════════════════════╗
+            ║              ❌ PIPELINE FAILED! ❌                     ║
+            ╚════════════════════════════════════════════════════════╝
             
-            Check the logs above for errors.
-            Common issues:
-            - Docker build failures (check Dockerfile)
-            - Docker Hub authentication (check credentials)
-            - Git credentials (check github-credentials)
-            - Manifest repository access
+            Check the logs above for detailed error information.
+            
+            ═══════════════════════════════════════════════════════
+            
+            🔍 Troubleshooting Commands:
+            
+            📊 Check rollout status:
+               kubectl argo rollouts get rollout ${ROLLOUT_NAME} -n ${NAMESPACE}
+            
+            📜 Check rollout events:
+               kubectl describe rollout ${ROLLOUT_NAME} -n ${NAMESPACE}
+            
+            📋 Check pod logs:
+               kubectl logs -l app=bluegreen-frontend -n ${NAMESPACE} --tail=50
+            
+            📋 Check all pods:
+               kubectl get pods -n ${NAMESPACE} -l app=bluegreen-frontend
+            
+            ❌ Abort failed rollout:
+               kubectl argo rollouts abort ${ROLLOUT_NAME} -n ${NAMESPACE}
+            
+            ═══════════════════════════════════════════════════════
+            
+            Common Issues:
+            ├─ Docker build failures → Check Dockerfile
+            ├─ Docker Hub auth → Check dockerhub-credentials
+            ├─ Git push failures → Check github-credentials
+            ├─ Rollout not found → Check ArgoCD Application
+            └─ Pods not starting → Check image name/tag
+            
+            ═══════════════════════════════════════════════════════
             """
         }
     }
