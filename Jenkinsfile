@@ -6,8 +6,7 @@ pipeline {
         DOCKER_REGISTRY = 'saimanasg'
         DOCKER_CREDENTIALS_ID = 'dockerhub-credentials'
         
-        // Image names
-        BACKEND_IMAGE = "${DOCKER_REGISTRY}/bluegreen-backend"
+        // Image name
         FRONTEND_IMAGE = "${DOCKER_REGISTRY}/bluegreen-frontend"
         
         // Git configuration
@@ -23,28 +22,17 @@ pipeline {
             }
         }
         
-        stage('Build Docker Images') {
+        stage('Build Docker Image') {
             steps {
                 script {
-                    echo "🔨 Building Docker images with tag: ${BUILD_NUMBER}"
+                    echo "🔨 Building Docker image with tag: ${BUILD_NUMBER}"
                     
-                    // Build backend
-                    dir('backend') {
-                        sh """
-                            docker build -t ${BACKEND_IMAGE}:${BUILD_NUMBER} .
-                            docker tag ${BACKEND_IMAGE}:${BUILD_NUMBER} ${BACKEND_IMAGE}:latest
-                        """
-                    }
+                    sh """
+                        docker build -t ${FRONTEND_IMAGE}:${BUILD_NUMBER} .
+                        docker tag ${FRONTEND_IMAGE}:${BUILD_NUMBER} ${FRONTEND_IMAGE}:latest
+                    """
                     
-                    // Build frontend
-                    dir('frontend') {
-                        sh """
-                            docker build -t ${FRONTEND_IMAGE}:${BUILD_NUMBER} .
-                            docker tag ${FRONTEND_IMAGE}:${BUILD_NUMBER} ${FRONTEND_IMAGE}:latest
-                        """
-                    }
-                    
-                    echo "✅ Images built successfully"
+                    echo "✅ Image built successfully"
                 }
             }
         }
@@ -52,7 +40,7 @@ pipeline {
         stage('Push to Docker Hub') {
             steps {
                 script {
-                    echo '📤 Pushing images to Docker Hub...'
+                    echo '📤 Pushing image to Docker Hub...'
                     
                     withCredentials([usernamePassword(
                         credentialsId: "${DOCKER_CREDENTIALS_ID}",
@@ -62,11 +50,6 @@ pipeline {
                         sh """
                             echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
                             
-                            # Push backend images
-                            docker push ${BACKEND_IMAGE}:${BUILD_NUMBER}
-                            docker push ${BACKEND_IMAGE}:latest
-                            
-                            # Push frontend images
                             docker push ${FRONTEND_IMAGE}:${BUILD_NUMBER}
                             docker push ${FRONTEND_IMAGE}:latest
                             
@@ -74,7 +57,7 @@ pipeline {
                         """
                     }
                     
-                    echo "✅ Images pushed successfully"
+                    echo "✅ Image pushed successfully"
                 }
             }
         }
@@ -97,32 +80,26 @@ pipeline {
                             
                             # Extract repo path for git clone with credentials
                             REPO_PATH=\$(echo ${manifestRepo} | sed 's|https://||')
-                            git clone https://${GIT_USER}:${GIT_TOKEN}@\${REPO_PATH} manifests-temp
+                            git clone https://\${GIT_USER}:\${GIT_TOKEN}@\${REPO_PATH} manifests-temp
                             
                             cd manifests-temp
                             
                             # Configure git
                             git config user.email "${GIT_USER_EMAIL}"
-                            git config user.name "${GIT_USER}"
+                            git config user.name "\${GIT_USER}"
                             
-                            # Update backend deployment (regular deployment)
-                            sed -i 's|image: .*/bluegreen-backend:.*|image: ${BACKEND_IMAGE}:${BUILD_NUMBER}|g' backend-deployment.yaml
-                            
-                            # Update frontend Rollout (blue-green deployment)
-                            sed -i 's|image: .*/bluegreen-frontend:.*|image: ${FRONTEND_IMAGE}:${BUILD_NUMBER}|g' frontend-rollout.yaml
-                            
-                            # Update ConfigMap with build number
-                            sed -i 's|BUILD_NUMBER: .*|BUILD_NUMBER: "${BUILD_NUMBER}"|g' configmap.yaml
+                            # Update frontend Rollout with new image tag
+                            sed -i 's|image: .*/bluegreen-frontend:.*|image: ${FRONTEND_IMAGE}:${BUILD_NUMBER}|g' rollout.yaml
                             
                             # Check if there are changes
                             if git diff --quiet; then
-                                echo "No changes to commit"
+                                echo "⚠️  No changes to commit"
                             else
                                 # Commit and push changes
-                                git add backend-deployment.yaml frontend-rollout.yaml configmap.yaml
-                                git commit -m "Build ${BUILD_NUMBER}: Update backend deployment and frontend rollout"
+                                git add rollout.yaml
+                                git commit -m "Build ${BUILD_NUMBER}: Update frontend image to ${BUILD_NUMBER}"
                                 git push origin main
-                                echo "✅ Manifests updated and pushed to Git"
+                                echo "✅ Manifest updated and pushed to Git"
                             fi
                             
                             # Cleanup
@@ -139,9 +116,6 @@ pipeline {
         always {
             echo '🧹 Cleaning up...'
             sh """
-                # Remove built images to save space
-                docker rmi ${BACKEND_IMAGE}:${BUILD_NUMBER} || true
-                docker rmi ${BACKEND_IMAGE}:latest || true
                 docker rmi ${FRONTEND_IMAGE}:${BUILD_NUMBER} || true
                 docker rmi ${FRONTEND_IMAGE}:latest || true
             """
@@ -153,29 +127,27 @@ pipeline {
             ✅ Pipeline completed successfully!
             ✅ ========================================
             
-            📦 Built Images:
-               - ${BACKEND_IMAGE}:${BUILD_NUMBER}
-               - ${FRONTEND_IMAGE}:${BUILD_NUMBER}
+            📦 Built Image:
+               ${FRONTEND_IMAGE}:${BUILD_NUMBER}
             
-            📝 Updated Manifests:
-               - backend-deployment.yaml (rolling update)
-               - frontend-rollout.yaml (blue-green preview)
-               - configmap.yaml
+            📝 Updated Manifest:
+               rollout.yaml
             
             🔄 Next Steps:
-               1. ArgoCD will sync changes (within 3 minutes)
-               2. Frontend Rollout creates preview pods with new image
+               1. ArgoCD will detect the manifest change
+               2. Argo Rollouts will create preview pods with new image
                3. Test preview at: http://<node-ip>:30081
-               4. Promote when ready: kubectl argo rollouts promote frontend-rollout -n bluegreen-demo
+               4. Promote when ready using kubectl or Argo Rollouts Dashboard
             
-            📊 Active Dashboard: http://<node-ip>:30080 (current version)
-            📊 Preview Dashboard: http://<node-ip>:30081 (new version - build ${BUILD_NUMBER})
+            📊 Active (Current): http://<node-ip>:30080
+            📊 Preview (Build ${BUILD_NUMBER}): http://<node-ip>:30081
             
-            💡 To promote preview to active:
-               kubectl argo rollouts promote frontend-rollout -n bluegreen-demo
+            💡 To promote:
+               kubectl argo rollouts promote bluegreen-frontend
             
-            💡 To check rollout status:
-               kubectl argo rollouts status frontend-rollout -n bluegreen-demo
+            💡 To check status:
+               kubectl argo rollouts status bluegreen-frontend
+               kubectl argo rollouts get rollout bluegreen-frontend --watch
             """
         }
         failure {
@@ -186,10 +158,10 @@ pipeline {
             
             Check the logs above for errors.
             Common issues:
-            - Docker build failures
-            - Docker Hub authentication
-            - Git credentials
-            - Manifest repo access
+            - Docker build failures (check Dockerfile)
+            - Docker Hub authentication (check credentials)
+            - Git credentials (check github-credentials)
+            - Manifest repository access
             """
         }
     }
