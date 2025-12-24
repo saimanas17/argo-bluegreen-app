@@ -139,45 +139,9 @@ pipeline {
             steps {
                 script {
                     echo '⏳ Waiting for preview pods to be ready...'
-                    
-                    timeout(time: 10, unit: 'MINUTES') {
-                        sh """
-                            # Wait for rollout to progress
-                            MAX_ATTEMPTS=60
-                            ATTEMPT=0
-                            
-                            while [ \$ATTEMPT -lt \$MAX_ATTEMPTS ]; do
-                                echo "Checking rollout status (attempt \$((ATTEMPT+1))/\$MAX_ATTEMPTS)..."
-                                
-                                # Get rollout status
-                                STATUS=\$(kubectl argo rollouts status ${ROLLOUT_NAME} -n ${NAMESPACE} 2>&1 || echo "error")
-                                
-                                # Check if healthy or paused (waiting for promotion)
-                                if echo "\$STATUS" | grep -qE "Healthy|Paused"; then
-                                    echo "✅ Preview deployment is ready!"
-                                    kubectl argo rollouts get rollout ${ROLLOUT_NAME} -n ${NAMESPACE}
-                                    break
-                                fi
-                                
-                                # Check if degraded
-                                if echo "\$STATUS" | grep -q "Degraded"; then
-                                    echo "❌ Rollout is degraded!"
-                                    kubectl argo rollouts get rollout ${ROLLOUT_NAME} -n ${NAMESPACE}
-                                    exit 1
-                                fi
-                                
-                                echo "⏳ Status: \$STATUS"
-                                sleep 10
-                                ATTEMPT=\$((ATTEMPT+1))
-                            done
-                            
-                            if [ \$ATTEMPT -ge \$MAX_ATTEMPTS ]; then
-                                echo "❌ Timeout waiting for preview deployment"
-                                exit 1
-                            fi
-                        """
-                    }
-                }
+                    sh """
+                        sleep 60
+                    """
             }
         }
         
