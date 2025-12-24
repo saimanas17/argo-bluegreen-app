@@ -46,7 +46,7 @@
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
-            padding: 70px 20px 20px 20px;  /* Extra padding for banner */
+            padding: 70px 20px 20px 20px;
             transition: background 0.5s ease;
         }
 
@@ -167,6 +167,7 @@
 
         .pod-item.active-pod { border-left-color: #3498db; }
         .pod-item.preview-pod { border-left-color: #2ecc71; }
+        .pod-item.unknown-pod { border-left-color: #95a5a6; }
 
         .pod-header {
             display: flex;
@@ -268,7 +269,7 @@
     </style>
 </head>
 <body>
-    <!-- Version Banner - Will show ACTIVE or PREVIEW -->
+    <!-- Version Banner -->
     <div id="versionBanner" class="version-banner version-active">
         🔵 ACTIVE VERSION - Build: Loading...
     </div>
@@ -280,7 +281,7 @@
                 Loading...
             </div>
             
-            <div class="info-grid" id="infoGrid">
+            <div class="info-grid">
                 <div class="info-card">
                     <div class="label">Build Number</div>
                     <div class="value" id="buildNumber">-</div>
@@ -303,7 +304,7 @@
         <div class="dashboard">
             <div class="card">
                 <h2>📊 Pod Summary</h2>
-                <div class="summary" id="summary">
+                <div class="summary">
                     <div class="summary-item">
                         <div class="number" id="totalPods">-</div>
                         <div class="label">Total Pods</div>
@@ -338,7 +339,7 @@
     </div>
 
     <script>
-        const API_URL = '';  // Empty string - nginx proxies /api/ to backend
+        const API_URL = '';
 
         // Global state
         let isPreview = false;
@@ -356,43 +357,33 @@
 
         async function detectVersion() {
             try {
-                // Detect version based on URL port
                 const port = window.location.port || '80';
                 const banner = document.getElementById('versionBanner');
                 const badge = document.getElementById('deploymentBadge');
                 const currentVersion = document.getElementById('currentVersion');
                 
-                // Get build number from API
                 const versionData = await fetchData('/api/version');
                 const buildNumber = versionData.buildNumber;
                 
                 if (port === '30081') {
-                    // Preview version (green)
+                    // Preview version
                     isPreview = true;
                     banner.className = 'version-banner version-preview';
                     banner.innerHTML = `🟢 PREVIEW VERSION - Build: ${buildNumber}`;
-                    
                     badge.className = 'deployment-badge badge-preview';
                     badge.textContent = `PREVIEW (Build ${buildNumber})`;
-                    
                     currentVersion.className = 'version-indicator badge-preview';
                     currentVersion.textContent = 'PREVIEW VERSION';
-                    
-                    // Change body theme to green
                     document.body.classList.add('preview-theme');
                 } else {
-                    // Active version (blue)
+                    // Active version
                     isPreview = false;
                     banner.className = 'version-banner version-active';
                     banner.innerHTML = `🔵 ACTIVE VERSION - Build: ${buildNumber}`;
-                    
                     badge.className = 'deployment-badge badge-active';
                     badge.textContent = `ACTIVE (Build ${buildNumber})`;
-                    
                     currentVersion.className = 'version-indicator badge-active';
                     currentVersion.textContent = 'ACTIVE VERSION';
-                    
-                    // Ensure body has blue theme
                     document.body.classList.remove('preview-theme');
                 }
             } catch (error) {
@@ -407,14 +398,12 @@
                 document.getElementById('buildNumber').textContent = data.buildNumber;
                 document.getElementById('hostname').textContent = data.hostname;
                 
-                // Update Redis status
                 const redisStatus = document.getElementById('redisStatus');
                 if (data.redis.connected) {
                     redisStatus.innerHTML = `✓ Redis ${data.redis.version || ''}`;
                 } else {
                     redisStatus.innerHTML = '❌ Disconnected';
                 }
-                
             } catch (error) {
                 console.error('Error loading deployment info:', error);
             }
@@ -434,19 +423,38 @@
             try {
                 const data = await fetchData('/api/pods');
                 
-                // Update summary
+                // Determine which pods to show based on port
+                const port = window.location.port || '80';
+                const showingPreview = (port === '30081');
+                
+                // Filter pods based on which service we're accessing
+                let podsToShow = data.pods;
+                if (showingPreview) {
+                    // Preview port: show only preview pods
+                    podsToShow = data.pods.filter(pod => pod.version === 'preview');
+                } else {
+                    // Active port: show only active pods
+                    podsToShow = data.pods.filter(pod => pod.version === 'active');
+                }
+                
+                // If no pods match (services might not have hash yet), show all
+                if (podsToShow.length === 0 && data.pods.length > 0) {
+                    podsToShow = data.pods;
+                }
+                
+                // Update summary (show total counts from backend)
                 document.getElementById('totalPods').textContent = data.summary.total;
                 document.getElementById('activePods').textContent = data.summary.active;
                 document.getElementById('previewPods').textContent = data.summary.preview;
                 
-                // Update pod list
+                // Update pod list with filtered pods
                 const podList = document.getElementById('podList');
-                if (data.pods.length === 0) {
-                    podList.innerHTML = '<div class="loading">No pods found</div>';
+                if (podsToShow.length === 0) {
+                    podList.innerHTML = '<div class="loading">No pods found for this version</div>';
                     return;
                 }
                 
-                podList.innerHTML = data.pods.map(pod => `
+                podList.innerHTML = podsToShow.map(pod => `
                     <div class="pod-item ${pod.version}-pod">
                         <div class="pod-header">
                             <span class="pod-name">${pod.name}</span>
@@ -463,10 +471,9 @@
                     </div>
                 `).join('');
                 
-                if (data.note) {
-                    podList.innerHTML += `<div class="error">${data.note}</div>`;
+                if (data.error) {
+                    podList.innerHTML += `<div class="error">Note: ${data.error}</div>`;
                 }
-                
             } catch (error) {
                 document.getElementById('podList').innerHTML = 
                     `<div class="error">Error loading pods: ${error.message}</div>`;
@@ -476,7 +483,6 @@
         async function loadServiceInfo() {
             try {
                 const data = await fetchData('/api/service');
-                // Service info is now shown in version detection
                 console.log('Service info:', data);
             } catch (error) {
                 console.error('Error loading service info:', error);

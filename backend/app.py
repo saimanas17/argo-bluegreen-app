@@ -71,60 +71,13 @@ def health():
 
 @app.route('/api/version', methods=['GET'])
 def get_version():
-    """
-    Detect if frontend calling this is active or preview
-    by checking which frontend pods are calling us
-    """
+    """Get version information"""
     hostname = socket.gethostname()
-    
-    # Try to determine if this request is from preview or active frontend
-    # We'll check the Referer header or use service routing info
-    is_preview = False
-    
-    try:
-        # In Kubernetes, we can check which service is routing to us
-        # For simplicity, we'll use pod labels or service info
-        v1 = client.CoreV1Api()
-        
-        # Get frontend service info to determine active vs preview
-        try:
-            active_svc = v1.read_namespaced_service('frontend-service-active', NAMESPACE)
-            preview_svc = v1.read_namespaced_service('frontend-service-preview', NAMESPACE)
-            
-            active_selector = active_svc.spec.selector
-            preview_selector = preview_svc.spec.selector
-            
-            # Check which frontend pods exist
-            frontend_pods = v1.list_namespaced_pod(
-                namespace=NAMESPACE,
-                label_selector='app=nginx-bluegreen'
-            )
-            
-            # Count active vs preview based on rollout hash
-            active_hash = None
-            preview_hash = None
-            
-            for pod in frontend_pods.items:
-                pod_hash = pod.metadata.labels.get('rollouts-pod-template-hash')
-                if pod_hash:
-                    # Check if this pod is selected by active or preview service
-                    pod_labels = pod.metadata.labels
-                    if all(pod_labels.get(k) == v for k, v in active_selector.items()):
-                        active_hash = pod_hash
-                    elif all(pod_labels.get(k) == v for k, v in preview_selector.items()):
-                        preview_hash = pod_hash
-            
-        except Exception as e:
-            print(f"Error detecting services: {e}")
-    
-    except Exception as e:
-        print(f"Error in version detection: {e}")
     
     return jsonify({
         'hostname': hostname,
         'buildNumber': BUILD_NUMBER,
         'environment': ENVIRONMENT,
-        'isPreview': is_preview,  # For now always false, frontend will detect from port
         'timestamp': datetime.now().isoformat()
     }), 200
 
@@ -213,25 +166,33 @@ def get_pods():
         pod_info = []
         
         # Get active and preview service selectors
+        active_hash = None
+        preview_hash = None
+        
         try:
             active_svc = v1.read_namespaced_service('frontend-service-active', NAMESPACE)
             preview_svc = v1.read_namespaced_service('frontend-service-preview', NAMESPACE)
             
             active_hash = active_svc.spec.selector.get('rollouts-pod-template-hash')
             preview_hash = preview_svc.spec.selector.get('rollouts-pod-template-hash')
-        except:
-            active_hash = None
-            preview_hash = None
+            
+            print(f"Active hash from service: {active_hash}")
+            print(f"Preview hash from service: {preview_hash}")
+        except Exception as e:
+            print(f"Error getting service selectors: {e}")
         
         for pod in pods.items:
-            pod_hash = pod.metadata.labels.get('rollouts-pod-template-hash')
+            pod_hash = pod.metadata.labels.get('rollouts-pod-template-hash', 'unknown')
             
-            # Determine if pod is active or preview
+            # Determine if pod is active or preview based on hash
             version = 'unknown'
-            if pod_hash == active_hash:
+            if active_hash and pod_hash == active_hash:
                 version = 'active'
-            elif pod_hash == preview_hash:
+            elif preview_hash and pod_hash == preview_hash:
                 version = 'preview'
+            elif active_hash is None and preview_hash is None:
+                # If services don't have hashes, mark all as unknown
+                version = 'unknown'
             
             # Get pod status
             phase = pod.status.phase
@@ -254,26 +215,35 @@ def get_pods():
         # Count by version
         active_count = sum(1 for p in pod_info if p['version'] == 'active')
         preview_count = sum(1 for p in pod_info if p['version'] == 'preview')
+        unknown_count = sum(1 for p in pod_info if p['version'] == 'unknown')
         
         return jsonify({
             'pods': pod_info,
             'summary': {
                 'total': len(pod_info),
                 'active': active_count,
-                'preview': preview_count
+                'preview': preview_count,
+                'unknown': unknown_count
+            },
+            'debug': {
+                'active_hash': active_hash,
+                'preview_hash': preview_hash
             }
         }), 200
         
     except Exception as e:
         print(f"Error getting pods: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'pods': [],
             'summary': {
                 'total': 0,
                 'active': 0,
-                'preview': 0
+                'preview': 0,
+                'unknown': 0
             },
-            'note': 'Demo mode - not connected to real cluster'
+            'error': str(e)
         }), 200
 
 @app.route('/api/service', methods=['GET'])
@@ -289,8 +259,8 @@ def get_service():
         active_selector = active_svc.spec.selector
         preview_selector = preview_svc.spec.selector
         
-        active_hash = active_selector.get('rollouts-pod-template-hash', 'unknown')
-        preview_hash = preview_selector.get('rollouts-pod-template-hash', 'unknown')
+        active_hash = active_selector.get('rollouts-pod-template-hash', 'none')
+        preview_hash = preview_selector.get('rollouts-pod-template-hash', 'none')
         
         return jsonify({
             'activeService': {
@@ -320,7 +290,7 @@ def get_service():
                 'name': 'frontend-service-preview',
                 'nodePort': 30081
             },
-            'note': 'Demo mode - not connected to real cluster'
+            'note': 'Error getting services'
         }), 200
 
 if __name__ == '__main__':
