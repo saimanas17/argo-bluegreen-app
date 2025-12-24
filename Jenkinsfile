@@ -161,7 +161,7 @@ pipeline {
                         # Get active service port
                         ACTIVE_PORT=\$(kubectl get service bluegreen-frontend-active -n ${NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "30080")
                         echo ""
-                        echo "🟢 Active (Production): http://${PUBLIC_IP}:\$ACTIVE_PORT"
+                        echo "🟢 Active : http://${PUBLIC_IP}:\$ACTIVE_PORT"
                         
                         # Get preview service port
                         PREVIEW_PORT=\$(kubectl get service bluegreen-frontend-preview -n ${NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "30081")
@@ -249,13 +249,14 @@ pipeline {
             }
         }
         
-        stage('Verify Production Deployment') {
+        stage('Verify Deployment') {
             steps {
                 script {
-                    echo '✅ Verifying production deployment...'
+                    echo '✅ Verifying deployment...'
                     
                     timeout(time: 5, unit: 'MINUTES') {
                         sh """
+                            sleep 30
                             # Wait for rollout to be fully healthy
                             kubectl argo rollouts status ${ROLLOUT_NAME} -n ${NAMESPACE}
                             
@@ -264,7 +265,7 @@ pipeline {
                             kubectl argo rollouts get rollout ${ROLLOUT_NAME} -n ${NAMESPACE}
                             
                             echo ""
-                            echo "✅ Production deployment verified!"
+                            echo "✅ Deployment verified!"
                         """
                     }
                 }
@@ -279,14 +280,11 @@ pipeline {
                 docker rmi ${FRONTEND_IMAGE}:${BUILD_NUMBER} || true
                 docker rmi ${FRONTEND_IMAGE}:latest || true
             """
-            cleanWs()
+            
         }
         success {
             script {
-                def urlsContent = readFile('urls.txt').trim()
-                def lines = urlsContent.split('\n')
-                def activeUrl = lines[0].split('=')[1]
-                
+                               
                 echo """
                 ╔════════════════════════════════════════════════════════╗
                 ║       ✅ DEPLOYMENT COMPLETED SUCCESSFULLY! ✅          ║
@@ -295,7 +293,7 @@ pipeline {
                 📦 Build: ${BUILD_NUMBER}
                 🐳 Image: ${FRONTEND_IMAGE}:${BUILD_NUMBER}
                 
-                🌐 Production URL: ${activeUrl}
+                🌐 Production URL: "${PUBLIC_IP}:30080"
                 
                 ═══════════════════════════════════════════════════════
                 
